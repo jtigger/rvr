@@ -14,12 +14,12 @@ var newColorSensorController = function (getColor) {
     var scan = {
         r: {min: 255, max: 0},
         g: {min: 255, max: 0},
-        b: {min: 255, max: 0}
+        b: {min: 255, max: 0},
+        enabled: false,
+        count: 0
     };
-    var scanning = false;
-
-    function takeScan() {
-        if (scanning) {
+    function takeScan(scanDelay) {
+        if (scan.enabled) {
             c = getColor();
             if (!(c.r === 0 && c.g === 0 && c.b === 0)) {
                 scan.r.min = Math.min(scan.r.min, c.r);
@@ -28,18 +28,21 @@ var newColorSensorController = function (getColor) {
                 scan.r.max = Math.max(scan.r.max, c.r);
                 scan.g.max = Math.max(scan.g.max, c.g);
                 scan.b.max = Math.max(scan.b.max, c.b);
+                scan.count++;
             }
-            setImmediate(takeScan);
+            setTimeout(takeScan, scanDelay, scanDelay);
         }
     }
-
-    function enableScanning() {
-        scanning = true;
-        takeScan();
+    function startScanning(scanDelay) {
+        if (scanDelay === undefined) {
+            scanDelay = 100;
+        }
+        scan.enabled = true;
+        scan.count = 0;
+        takeScan(scanDelay);
     }
-
     function stopScanning() {
-        scanning = false;
+        scan.enabled = false;
     }
 
     function yieldColorSpec() {
@@ -47,6 +50,7 @@ var newColorSensorController = function (getColor) {
             r: {value: Math.round((scan.r.max + scan.r.min) / 2), tolerance: 0},
             g: {value: Math.round((scan.g.max + scan.g.min) / 2), tolerance: 0},
             b: {value: Math.round((scan.b.max + scan.b.min) / 2), tolerance: 0},
+            count: scan.count
         };
         spec.r.tolerance = Math.max(scan.r.max - spec.r.value, spec.r.value - scan.r.min);
         spec.g.tolerance = Math.max(scan.g.max - spec.g.value, spec.g.value - scan.g.min);
@@ -56,7 +60,7 @@ var newColorSensorController = function (getColor) {
 
     return {
         isMatching: isMatching,
-        enableScanning: enableScanning,
+        startScanning: startScanning,
         stopScanning: stopScanning,
         yieldColorSpec: yieldColorSpec
     }
@@ -98,6 +102,18 @@ describe('ColorSensorController', () => {
             };
             let getColor = function () {
                 return {r: 255, g: 68, b: 97};
+            };
+            controller = newColorSensorController(getColor);
+            expect(controller.isMatching(spec)).toBeFalsy();
+        });
+        test('when blue is outside tolerances, returns false', async () => {
+            let spec = {
+                r: {value: 255, tolerance: 10},
+                g: {value: 57, tolerance: 10},
+                b: {value: 97, tolerance: 10}
+            };
+            let getColor = function () {
+                return {r: 255, g: 57, b: 197};
             };
             controller = newColorSensorController(getColor);
             expect(controller.isMatching(spec)).toBeFalsy();
@@ -145,18 +161,18 @@ describe('ColorSensorController', () => {
                 }
             };
             controller = newColorSensorController(getColor);
-            controller.enableScanning();
+            controller.startScanning(1);
             while (idx < data.length) {
                 await sleep(1);
             }
             controller.stopScanning();
             let spec = controller.yieldColorSpec();
-            expect(spec.r.value).toBe(4);
-            expect(spec.r.tolerance).toBe(3);
-            expect(spec.g.value).toBe(45);
-            expect(spec.g.tolerance).toBe(5);
-            expect(spec.b.value).toBe(106);
-            expect(spec.b.tolerance).toBe(5);
+            expect(spec).toStrictEqual({
+                r: {value: 4, tolerance: 3},
+                g: {value: 45, tolerance: 5},
+                b: {value: 106, tolerance: 5},
+                count: 3
+            });
         });
         test('ignores black/off values', async () => {
             let scanNum = 0;
@@ -169,7 +185,7 @@ describe('ColorSensorController', () => {
                 }
             };
             controller = newColorSensorController(getColor);
-            controller.enableScanning();
+            controller.startScanning(1);
             while (scanNum < 4) {
                 await sleep(1);
             }
