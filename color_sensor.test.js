@@ -11,8 +11,54 @@ var newColorSensorController = function (getColor) {
             c.b <= spec.b.value + spec.b.tolerance;
     }
 
+    var scan = {
+        r: {min: 255, max: 0},
+        g: {min: 255, max: 0},
+        b: {min: 255, max: 0}
+    };
+    var scanning = false;
+
+    function takeScan() {
+        if (scanning) {
+            c = getColor();
+            if (!(c.r === 0 && c.g === 0 && c.b === 0)) {
+                scan.r.min = Math.min(scan.r.min, c.r);
+                scan.g.min = Math.min(scan.g.min, c.g);
+                scan.b.min = Math.min(scan.b.min, c.b);
+                scan.r.max = Math.max(scan.r.max, c.r);
+                scan.g.max = Math.max(scan.g.max, c.g);
+                scan.b.max = Math.max(scan.b.max, c.b);
+            }
+            setImmediate(takeScan);
+        }
+    }
+
+    function enableScanning() {
+        scanning = true;
+        takeScan();
+    }
+
+    function stopScanning() {
+        scanning = false;
+    }
+
+    function yieldColorSpec() {
+        var spec = {
+            r: {value: Math.round((scan.r.max + scan.r.min) / 2), tolerance: 0},
+            g: {value: Math.round((scan.g.max + scan.g.min) / 2), tolerance: 0},
+            b: {value: Math.round((scan.b.max + scan.b.min) / 2), tolerance: 0},
+        };
+        spec.r.tolerance = Math.max(scan.r.max - spec.r.value, spec.r.value - scan.r.min);
+        spec.g.tolerance = Math.max(scan.g.max - spec.g.value, spec.g.value - scan.g.min);
+        spec.b.tolerance = Math.max(scan.b.max - spec.b.value, spec.b.value - scan.b.min);
+        return spec;
+    }
+
     return {
-        isMatching: isMatching
+        isMatching: isMatching,
+        enableScanning: enableScanning,
+        stopScanning: stopScanning,
+        yieldColorSpec: yieldColorSpec
     }
 };
 
@@ -81,9 +127,61 @@ describe('ColorSensorController', () => {
             expect(controller.isMatching(spec)).toBeTruthy();
         });
     });
-    describe('beginColorSpec()', () => {
-    });
-    describe('completeColorSpec()', () => {
+    describe('color spec generation', () => {
+        test('calculates a color spec from the colors scanned', async () => {
+            let idx = 0;
+            let data = [
+                {r: 0, g: 0, b: 0},
+                {r: 1, g: 40, b: 101},
+                {r: 2, g: 45, b: 101},
+                {r: 6, g: 50, b: 111},
+            ];
+            let getColor = function () {
+                idx++;
+                if (idx < data.length) {
+                    return data[idx];
+                } else {
+                    return {r: 0, g: 0, b: 0};
+                }
+            };
+            controller = newColorSensorController(getColor);
+            controller.enableScanning();
+            while (idx < data.length) {
+                await sleep(1);
+            }
+            controller.stopScanning();
+            let spec = controller.yieldColorSpec();
+            expect(spec.r.value).toBe(4);
+            expect(spec.r.tolerance).toBe(3);
+            expect(spec.g.value).toBe(45);
+            expect(spec.g.tolerance).toBe(5);
+            expect(spec.b.value).toBe(106);
+            expect(spec.b.tolerance).toBe(5);
+        });
+        test('ignores black/off values', async () => {
+            let scanNum = 0;
+            let getColor = function () {
+                scanNum++;
+                if (scanNum === 2) {
+                    return {r: 100, g: 120, b: 140};
+                } else {
+                    return {r: 0, g: 0, b: 0};
+                }
+            };
+            controller = newColorSensorController(getColor);
+            controller.enableScanning();
+            while (scanNum < 4) {
+                await sleep(1);
+            }
+            controller.stopScanning();
+            let spec = controller.yieldColorSpec();
+            expect(spec.r.value).toBe(100);
+            expect(spec.r.tolerance).toBe(0);
+            expect(spec.g.value).toBe(120);
+            expect(spec.g.tolerance).toBe(0);
+            expect(spec.b.value).toBe(140);
+            expect(spec.b.tolerance).toBe(0);
+        })
     });
 
     xdescribe('setStrategy()', () => {
@@ -123,3 +221,6 @@ describe('ColorSensorController', () => {
     });
 });
 
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
