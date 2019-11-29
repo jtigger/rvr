@@ -1,6 +1,36 @@
 // newColorSensorController returns a wrapper around the RVR color sensor
 //   getColor = the global `getColor()` RVR function
 var newColorSensorController = function (getColor) {
+    function average(colors) {
+        var avg = {r: 0, g: 0, b: 0};
+        for (idx = 0; idx < colors.length; idx++) {
+            avg.r += colors[idx].r;
+            avg.g += colors[idx].g;
+            avg.b += colors[idx].b;
+        }
+        avg.r /= colors.length;
+        avg.g /= colors.length;
+        avg.b /= colors.length;
+
+        return avg;
+    }
+
+    function standardDeviation(colors) {
+        var avg = average(colors);
+
+        var stdev = {r: 0, g: 0, b: 0};
+        for (idx = 0; idx < colors.length; idx++) {
+            stdev.r += (avg.r - colors[idx].r) * (avg.r - colors[idx].r);
+            stdev.g += (avg.g - colors[idx].g) * (avg.g - colors[idx].g);
+            stdev.b += (avg.b - colors[idx].b) * (avg.b - colors[idx].b);
+        }
+        stdev.r = Math.sqrt(stdev.r / colors.length);
+        stdev.g = Math.sqrt(stdev.g / colors.length);
+        stdev.b = Math.sqrt(stdev.b / colors.length);
+
+        return stdev;
+    }
+
     function isMatching(spec) {
         var c = getColor();
         return c.r >= spec.r.value - spec.r.tolerance &&
@@ -11,6 +41,33 @@ var newColorSensorController = function (getColor) {
             c.b <= spec.b.value + spec.b.tolerance;
     }
 
+    var rawColorLog = [];
+    var avgColorLog = [];
+    var lastColor = {r: 0, g: 0, b: 0};
+
+    function getLastColor() {
+        var stableColor = lastColor;
+
+        rawColorLog.push(getColor());
+        var currAvgColor = average(rawColorLog);
+        avgColorLog.push(currAvgColor);
+
+        if (avgColorLog.length === 20) {
+            var stdev = standardDeviation(avgColorLog);
+
+            stableColor.r = (stdev.r < 2.9) ? Math.round(currAvgColor.r) : lastColor.r;
+            stableColor.g = (stdev.g < 2.9) ? Math.round(currAvgColor.g) : lastColor.g;
+            stableColor.b = (stdev.b < 2.9) ? Math.round(currAvgColor.b) : lastColor.b;
+            lastColor = stableColor;
+
+            rawColorLog.shift();
+            avgColorLog.shift();
+        }
+
+        lastColor = stableColor;
+        return stableColor;
+    }
+
     var scan = {
         r: {min: 255, max: 0},
         g: {min: 255, max: 0},
@@ -18,6 +75,7 @@ var newColorSensorController = function (getColor) {
         enabled: false,
         count: 0
     };
+
     function takeScan(scanDelay) {
         if (scan.enabled) {
             c = getColor();
@@ -33,6 +91,7 @@ var newColorSensorController = function (getColor) {
             setTimeout(takeScan, scanDelay, scanDelay);
         }
     }
+
     function startScanning(scanDelay) {
         if (scanDelay === undefined) {
             scanDelay = 100;
@@ -41,6 +100,7 @@ var newColorSensorController = function (getColor) {
         scan.count = 0;
         takeScan(scanDelay);
     }
+
     function stopScanning() {
         scan.enabled = false;
     }
@@ -62,13 +122,153 @@ var newColorSensorController = function (getColor) {
         isMatching: isMatching,
         startScanning: startScanning,
         stopScanning: stopScanning,
-        yieldColorSpec: yieldColorSpec
+        yieldColorSpec: yieldColorSpec,
+        getColor: getLastColor
     }
 };
 
 describe('ColorSensorController', () => {
     let controller;
 
+    describe('getColor()', () => {
+        test('reports latest stablized color', async () => {
+            // see https://docs.google.com/spreadsheets/d/1PyqFdtIAGopsrHa5gaVbM-9EZxtakx8EsnYDibyx1Ok
+            let data = [
+                /* grey */
+                {r: 100, g: 101, b: 100},
+                {r: 99, g: 100, b: 100},
+                {r: 100, g: 100, b: 100},
+                {r: 100, g: 100, b: 100},
+                {r: 101, g: 100, b: 100},
+                {r: 100, g: 100, b: 100},
+                {r: 100, g: 99, b: 100},
+                {r: 102, g: 100, b: 100},
+                {r: 100, g: 100, b: 99},
+                {r: 150, g: 150, b: 150},
+                {r: 100, g: 101, b: 99},
+                {r: 100, g: 100, b: 100},
+                {r: 100, g: 99, b: 100},
+                {r: 100, g: 100, b: 100},
+                {r: 100, g: 100, b: 100},
+                {r: 100, g: 99, b: 101},
+                {r: 0, g: 0, b: 0}, /* bits of error */
+                {r: 100, g: 100, b: 100},
+                {r: 100, g: 99, b: 100},
+                {r: 100, g: 100, b: 100},
+                {r: 100, g: 100, b: 100},
+                {r: 100, g: 100, b: 100},
+                {r: 100, g: 100, b: 100},
+                {r: 255, g: 0, b: 0},
+                {r: 100, g: 100, b: 100},
+                /* starting to read red. */
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 5, b: 1},
+                {r: 255, g: 0, b: 0},
+                {r: 254, g: 4, b: 1},
+                {r: 253, g: 3, b: 0},
+                {r: 255, g: 0, b: 1},
+                {r: 254, g: 2, b: 0},
+                {r: 253, g: 1, b: 1},
+                {r: 255, g: 0, b: 0},
+                {r: 0, g: 0, b: 0}, /* ... with bits of error ... */
+                {r: 255, g: 0, b: 0},
+                {r: 0, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 254, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 1, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 254, g: 2, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 4, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 5, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 3, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 254, g: 0, b: 0},
+                {r: 255, g: 2, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 254, g: 3, b: 0},
+                {r: 253, g: 0, b: 0},
+                {r: 255, g: 1, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 253, g: 3, b: 0},
+                {r: 254, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 5, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 253, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 253, g: 5, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 254, g: 0, b: 0},
+                {r: 255, g: 5, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 254, g: 0, b: 0},
+                {r: 255, g: 6, b: 0},
+                {r: 253, g: 0, b: 0},
+                {r: 254, g: 0, b: 0},
+                {r: 255, g: 1, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 253, g: 1, b: 0},
+                {r: 254, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 250, g: 1, b: 2},
+                {r: 253, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 254, g: 1, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 253, g: 1, b: 0},
+                {r: 250, g: 2, b: 1},
+                {r: 254, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 253, g: 1, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 1, b: 0},
+                {r: 254, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 0, b: 0},
+                {r: 255, g: 1, b: 0},
+            ];
+            let idx = 0;
+
+            function getColor() {
+                if (idx < data.length) {
+                    return data[idx++];
+                } else {
+                    return data[data.length - 1];
+                }
+            }
+
+            // the only points at which the color value is expected to change.
+            let transitions = new Map([
+                [0, {r: 0, g: 0, b: 0}],
+                [19, {r: 98, g: 97, b: 97}],
+                [60, {r: 98, g: 1, b: 0}],
+                [74, {r: 254, g: 1, b: 0}],
+                [94, {r: 254, g: 0, b: 0}],
+            ]);
+            controller = newColorSensorController(getColor);
+
+            let expectedColor = {r: 0, g: 0, b: 0};
+            while (idx < data.length) {
+                if (transitions.get(idx) !== undefined) {
+                    expectedColor = transitions.get(idx);
+                }
+                let actualColor = controller.getColor();
+                expect({idx: idx - 1, color: actualColor}).toStrictEqual({idx: idx - 1, color: expectedColor});
+                await sleep(1); // allow
+            }
+        })
+    });
     describe('isMatching', () => {
         test('when given color is within tolerances, returns true', async () => {
             let spec = {
