@@ -1,9 +1,20 @@
 // newColorSensorController returns a wrapper around the RVR color sensor
 //   getColor = the global `getColor()` RVR function
-var newColorSensorController = function (getColor) {
+//   config = {
+//      stability (int; 20) = how consistently the color sensor is reporting a given value until it gets reported
+//         by `getColor()`.  Smaller values make the controller more sensitive; larger values makes it more stable.
+//      sampleFrequency (number; 10) = approximately how frequently color samples should be asynchronously taken in a
+//         second (i.e. in Hz).  If 0, disables automatic sampling -- samples will only be collected during calls to
+//         `getColor()`.
+//   }
+var newColorSensorController = function (getColor, config) {
+    config = config || {};
+    config.stability = (config.stability === undefined) ? 20 : config.stability;
+    config.sampleFrequency = (config.sampleFrequency === undefined) ? 10 : config.sampleFrequency;
+
     function average(colors) {
         var avg = {r: 0, g: 0, b: 0};
-        for (idx = 0; idx < colors.length; idx++) {
+        for (var idx = 0; idx < colors.length; idx++) {
             avg.r += colors[idx].r;
             avg.g += colors[idx].g;
             avg.b += colors[idx].b;
@@ -19,7 +30,7 @@ var newColorSensorController = function (getColor) {
         var avg = average(colors);
 
         var stdev = {r: 0, g: 0, b: 0};
-        for (idx = 0; idx < colors.length; idx++) {
+        for (var idx = 0; idx < colors.length; idx++) {
             stdev.r += (avg.r - colors[idx].r) * (avg.r - colors[idx].r);
             stdev.g += (avg.g - colors[idx].g) * (avg.g - colors[idx].g);
             stdev.b += (avg.b - colors[idx].b) * (avg.b - colors[idx].b);
@@ -32,7 +43,7 @@ var newColorSensorController = function (getColor) {
     }
 
     function isMatching(spec) {
-        var c = getColor();
+        var c = getStableColor();
         return c.r >= spec.r.value - spec.r.tolerance &&
             c.r <= spec.r.value + spec.r.tolerance &&
             c.g >= spec.g.value - spec.g.tolerance &&
@@ -45,14 +56,21 @@ var newColorSensorController = function (getColor) {
     var avgColorLog = [];
     var lastColor = {r: 0, g: 0, b: 0};
 
-    function getLastColor() {
+    function collectSample(freq) {
+        if (freq !== 0) {
+            getStableColor();
+            setTimeout(collectSample, 1000/freq, freq);
+        }
+    }
+
+    function getStableColor() {
         var stableColor = lastColor;
 
         rawColorLog.push(getColor());
         var currAvgColor = average(rawColorLog);
         avgColorLog.push(currAvgColor);
 
-        if (avgColorLog.length === 20) {
+        if (avgColorLog.length === config.stability) {
             var stdev = standardDeviation(avgColorLog);
 
             stableColor.r = (stdev.r < 2.9) ? Math.round(currAvgColor.r) : lastColor.r;
@@ -76,9 +94,9 @@ var newColorSensorController = function (getColor) {
         count: 0
     };
 
-    function takeScan(scanDelay) {
+    function takeScan(scanFrequency) {
         if (scan.enabled) {
-            c = getColor();
+            c = getStableColor();
             if (!(c.r === 0 && c.g === 0 && c.b === 0)) {
                 scan.r.min = Math.min(scan.r.min, c.r);
                 scan.g.min = Math.min(scan.g.min, c.g);
@@ -88,17 +106,17 @@ var newColorSensorController = function (getColor) {
                 scan.b.max = Math.max(scan.b.max, c.b);
                 scan.count++;
             }
-            setTimeout(takeScan, scanDelay, scanDelay);
+            setTimeout(takeScan, 1000/scanFrequency, scanFrequency);
         }
     }
 
-    function startScanning(scanDelay) {
-        if (scanDelay === undefined) {
-            scanDelay = 100;
+    function startScanning(scanFrequency) {
+        if (scanFrequency === undefined) {
+            scanFrequency = 10;
         }
         scan.enabled = true;
         scan.count = 0;
-        takeScan(scanDelay);
+        takeScan(scanFrequency);
     }
 
     function stopScanning() {
@@ -118,12 +136,13 @@ var newColorSensorController = function (getColor) {
         return spec;
     }
 
+    collectSample(config.sampleFrequency);
     return {
         isMatching: isMatching,
         startScanning: startScanning,
         stopScanning: stopScanning,
         yieldColorSpec: yieldColorSpec,
-        getColor: getLastColor
+        getColor: getStableColor
     }
 };
 
@@ -131,7 +150,7 @@ describe('ColorSensorController', () => {
     let controller;
 
     describe('getColor()', () => {
-        test('reports latest stablized color', async () => {
+        test('reports latest stabilized color', async () => {
             // see https://docs.google.com/spreadsheets/d/1PyqFdtIAGopsrHa5gaVbM-9EZxtakx8EsnYDibyx1Ok
             let data = [
                 /* grey */
@@ -256,7 +275,7 @@ describe('ColorSensorController', () => {
                 [74, {r: 254, g: 1, b: 0}],
                 [94, {r: 254, g: 0, b: 0}],
             ]);
-            controller = newColorSensorController(getColor);
+            controller = newColorSensorController(getColor, {stability: 20});
 
             let expectedColor = {r: 0, g: 0, b: 0};
             while (idx < data.length) {
@@ -265,11 +284,10 @@ describe('ColorSensorController', () => {
                 }
                 let actualColor = controller.getColor();
                 expect({idx: idx - 1, color: actualColor}).toStrictEqual({idx: idx - 1, color: expectedColor});
-                await sleep(1); // allow
             }
         })
     });
-    describe('isMatching', () => {
+    describe('isMatching()', () => {
         test('when given color is within tolerances, returns true', async () => {
             let spec = {
                 r: {value: 255, tolerance: 10},
@@ -279,7 +297,7 @@ describe('ColorSensorController', () => {
             let getColor = function () {
                 return {r: 255, g: 57, b: 97};
             };
-            controller = newColorSensorController(getColor);
+            controller = newColorSensorController(getColor, {stability: 1});
             expect(controller.isMatching(spec)).toBeTruthy();
         });
         test('when red is outside tolerances, returns false', async () => {
@@ -291,7 +309,7 @@ describe('ColorSensorController', () => {
             let getColor = function () {
                 return {r: 235, g: 57, b: 97};
             };
-            controller = newColorSensorController(getColor);
+            controller = newColorSensorController(getColor, {stability: 1});
             expect(controller.isMatching(spec)).toBeFalsy();
         });
         test('when green is outside tolerances, returns false', async () => {
@@ -303,7 +321,7 @@ describe('ColorSensorController', () => {
             let getColor = function () {
                 return {r: 255, g: 68, b: 97};
             };
-            controller = newColorSensorController(getColor);
+            controller = newColorSensorController(getColor, {stability: 1});
             expect(controller.isMatching(spec)).toBeFalsy();
         });
         test('when blue is outside tolerances, returns false', async () => {
@@ -315,7 +333,7 @@ describe('ColorSensorController', () => {
             let getColor = function () {
                 return {r: 255, g: 57, b: 197};
             };
-            controller = newColorSensorController(getColor);
+            controller = newColorSensorController(getColor, {stability: 1});
             expect(controller.isMatching(spec)).toBeFalsy();
         });
         test('when given color is at upper tolerances, returns true', async () => {
@@ -327,7 +345,7 @@ describe('ColorSensorController', () => {
             let getColor = function () {
                 return {r: 110, g: 60, b: 100};
             };
-            controller = newColorSensorController(getColor);
+            controller = newColorSensorController(getColor, {stability: 1});
             expect(controller.isMatching(spec)).toBeTruthy();
         });
         test('when given color is at lower tolerances, returns true', async () => {
@@ -339,11 +357,11 @@ describe('ColorSensorController', () => {
             let getColor = function () {
                 return {r: 90, g: 40, b: 80};
             };
-            controller = newColorSensorController(getColor);
+            controller = newColorSensorController(getColor, {stability: 1});
             expect(controller.isMatching(spec)).toBeTruthy();
         });
     });
-    describe('color spec generation', () => {
+    describe('yieldColorSpec()', () => {
         test('calculates a color spec from the colors scanned', async () => {
             let idx = 0;
             let data = [
@@ -360,8 +378,8 @@ describe('ColorSensorController', () => {
                     return {r: 0, g: 0, b: 0};
                 }
             };
-            controller = newColorSensorController(getColor);
-            controller.startScanning(1);
+            controller = newColorSensorController(getColor, {stability: 1, sampleFrequency: 0});
+            controller.startScanning(1000);
             while (idx < data.length) {
                 await sleep(1);
             }
@@ -384,8 +402,8 @@ describe('ColorSensorController', () => {
                     return {r: 0, g: 0, b: 0};
                 }
             };
-            controller = newColorSensorController(getColor);
-            controller.startScanning(1);
+            controller = newColorSensorController(getColor, {stability: 1});
+            controller.startScanning(1000);
             while (scanNum < 4) {
                 await sleep(1);
             }
