@@ -54,17 +54,24 @@ var newColorSensorController = function (getColor, config) {
 
     var rawColorLog = [];
     var avgColorLog = [];
-    var lastColor = {r: 0, g: 0, b: 0};
+    var stableColor = {r: 0, g: 0, b: 0};
 
-    function collectSample(freq) {
+    function getStableColor() {
+        if (config.sampleFrequency === 0) {
+            collectSample();
+        }
+        return stableColor;
+    }
+
+    function collectSamples(freq) {
         if (freq !== 0) {
-            getStableColor();
-            setTimeout(collectSample, 1000/freq, freq);
+            collectSample();
+            setTimeout(collectSamples, 1000/freq, freq);
         }
     }
 
-    function getStableColor() {
-        var stableColor = lastColor;
+    function collectSample() {
+        var color = stableColor;
 
         rawColorLog.push(getColor());
         var currAvgColor = average(rawColorLog);
@@ -73,17 +80,16 @@ var newColorSensorController = function (getColor, config) {
         if (avgColorLog.length === config.stability) {
             var stdev = standardDeviation(avgColorLog);
 
-            stableColor.r = (stdev.r < 2.9) ? Math.round(currAvgColor.r) : lastColor.r;
-            stableColor.g = (stdev.g < 2.9) ? Math.round(currAvgColor.g) : lastColor.g;
-            stableColor.b = (stdev.b < 2.9) ? Math.round(currAvgColor.b) : lastColor.b;
-            lastColor = stableColor;
+            color.r = (stdev.r < 2.9) ? Math.round(currAvgColor.r) : stableColor.r;
+            color.g = (stdev.g < 2.9) ? Math.round(currAvgColor.g) : stableColor.g;
+            color.b = (stdev.b < 2.9) ? Math.round(currAvgColor.b) : stableColor.b;
+            stableColor = color;
 
             rawColorLog.shift();
             avgColorLog.shift();
         }
 
-        lastColor = stableColor;
-        return stableColor;
+        stableColor = color;
     }
 
     var scan = {
@@ -136,7 +142,7 @@ var newColorSensorController = function (getColor, config) {
         return spec;
     }
 
-    collectSample(config.sampleFrequency);
+    collectSamples(config.sampleFrequency);
     return {
         isMatching: isMatching,
         startScanning: startScanning,
@@ -146,23 +152,212 @@ var newColorSensorController = function (getColor, config) {
     }
 };
 
-var colorSensorCtrl = newColorSensorController(getColor, {stability: 1, sampleFrequency: 5});
 
+var kitchenTileSpec = {
+    r: {value: 236, tolerance: 20},
+    g: {value: 220, tolerance: 20},
+    b: {value: 202, tolerance: 20}
+}
 
-var kitchenTileSpec = {};
-var woodFloorSpec = {};
-var carpetSpec = {};
+var woodFloorSpec = {
+    r: {value: 86, tolerance: 35},
+    g: {value: 68, tolerance: 30},
+    b: {value: 22, tolerance: 20}
+};
+
+var carpetSpec = {
+    r: {value: 98, tolerance: 14},
+    g: {value: 91, tolerance: 13},
+    b: {value: 65, tolerance: 15}
+};
+
+var orangePaperSpec = {
+    r: {value: 255, tolerance: 5},
+    g: {value: 100, tolerance: 5},
+    b: {value: 40, tolerance: 5}
+};
+
+var greenPaperSpec = {
+    r: {value: 64, tolerance: 5},
+    g: {value: 194, tolerance: 5},
+    b: {value: 92, tolerance: 5}
+}
+
+var yellowSwatchSpec = {
+    r: {value: 255, tolerance: 5},
+    g: {value: 240, tolerance: 5},
+    b: {value: 26, tolerance: 5}
+}
+
 
 async function startProgram() {
-    colorSensorCtrl.startScanning();
-    await delay(10);
+    resetAim();
+    var colorSensorCtrl = newColorSensorController(getColor, {stability: 5, sampleFrequency: 250});
+    openEyes();
+    await delay(5);
+    lookForGold(colorSensorCtrl);
+    wanderOnWood(colorSensorCtrl);
+    // scanForColor(colorSensorCtrl);
+}
+
+var eyeState = {
+    lids: "closed",
+    mode: "looking",
+    targetBlinks: 0,
+    blinks: 0
+}
+
+function openEyes() {
+    setFrontLed({r: 255, g: 255, b: 255});
+    eyeState.lids = "opened";
+    setTimeout(closeEyes, (eyeState.mode === "looking") ? (3 + Math.random()*3) * 1000 : 190);
+}
+
+function closeEyes() {
+    setFrontLed({r: 0, g: 0, b: 0});
+    eyeState.lids = "closed";
+
+    if(eyeState.mode === "looking") {
+        eyeState.mode = "blinking";
+        eyeState.blinks = 0;
+        eyeState.targetBlinks = Math.round(Math.random()*2);
+    } else {
+        eyeState.blinks++;
+        if(eyeState.blinks >= eyeState.targetBlinks) {
+            eyeState.mode = "looking";
+        }
+    }
+
+    setTimeout(openEyes, 210);
+}
+
+
+function setBodyLed(color) {
+    setBackLed(color);
+    setLeftLed(color);
+    setRightLed(color);
+}
+
+var state = "standing";
+var running = true;
+
+async function lookForGold(colorSensorCtrl) {
+    if(colorSensorCtrl.isMatching(yellowSwatchSpec)) {
+        running = false;
+        setBodyLed({r: 255, g:240, b: 25});
+        await roll(getHeading(), -30, 1);
+        await speak("Gold!  I found gold!");
+        return;
+    }
+    setTimeout(lookForGold, 10, colorSensorCtrl);
+}
+
+async function wanderOnWood(colorSensorCtrl) {
+    if (!running) { return; }
+    if(colorSensorCtrl.isMatching(woodFloorSpec)) {
+        if (state !== "wandering") {
+            setBodyLed({r:0, g: 0, b: 255});
+            setSpeed(30);
+            state = "wandering";
+        }
+    } else {
+        if (state === "wandering") {
+            backOff(colorSensorCtrl);
+        }
+    }
+    setTimeout(wanderOnWood, 10, colorSensorCtrl);
+}
+
+async function backOff(colorSensorCtrl) {
+    if (!running) { return; }
+    if (!colorSensorCtrl.isMatching(woodFloorSpec)) {
+        if (state !== "backing off") {
+            setBodyLed({r: 255, g: 0, b: 0});
+            setSpeed(-1 * getSpeed());
+            state = "backing off";
+        }
+    } else {
+        if (state === "backing off") {
+            setBodyLed({r: 255, g: 240, b: 25});
+            setHeading((getHeading()+180) +
+                (-45 + (Math.random() * 90)) %
+                360);
+            setSpeed(-1 * getSpeed());
+            state = "about face";
+            wanderOnWood(colorSensorCtrl);
+        }
+    }
+
+    setTimeout(backOff, 10, colorSensorCtrl);
+}
+
+
+function showColor(colorSensorCtrl) {
+    setMainLed(colorSensorCtrl.getColor());
+    setTimeout(showColor, 10, colorSensorCtrl);
+}
+
+
+async function speakSpaces(colorSensorCtrl) {
+
+    while(true) {
+        if (colorSensorCtrl.isMatching(carpetSpec)) {
+            await speak("carpet");
+        }
+        if (colorSensorCtrl.isMatching(woodFloorSpec)) {
+            await speak("wood");
+        }
+        if (colorSensorCtrl.isMatching(kitchenTileSpec)) {
+            await speak("tile");
+        }
+        await delay(0.1);
+    }
+}
+
+async function scanForColor(colorSensorCtrl) {
+    colorSensorCtrl.startScanning(10);
+
+    await wiggleOverSwatch();
 
     var spec = colorSensorCtrl.yieldColorSpec();
-    for(idx = 0; idx < 2; idx++) {
+    while(true) {
+        setMainLed({r: 255, g:255, b:255});
         await speak("From " + spec.count + " samples.");
+
+        setMainLed({r: spec.r.value, g:0, b:0});
         await speak("red: " + spec.r.value + "; delta " + spec.r.tolerance + "..");
+
+        setMainLed({r: 0, g:spec.g.value, b:0});
         await speak("green: " + spec.g.value + "; delta " + spec.g.tolerance + "..");
+
+        setMainLed({r: 0, g:0, b:spec.b.value});
         await speak("blue: " + spec.b.value + "; delta " + spec.b.tolerance + "..");
+
+        setMainLed({r: 0, g:0, b:0});
         await delay(5);
     }
+}
+
+async function walkTheLine() {
+    resetAim();
+    await roll(0, 40, 3);
+    await delay(2);
+    await roll(1, -40, 3);
+}
+
+async function wiggleOverSwatch() {
+    resetAim();
+    for(var idx = 0; idx < 5; idx++) {
+        await roll(0, 10, 2);
+        await roll(0, -10, 2);
+    }
+}
+
+async function rollInARectangle() {
+    resetAim();
+    await roll(0, 40, 8);
+    await roll(90, 40, 4);
+    await roll(180, 40, 8);
+    await roll(270, 40, 4);
+    setHeading(0);
 }
