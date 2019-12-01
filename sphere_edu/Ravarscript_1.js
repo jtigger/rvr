@@ -27,10 +27,11 @@
 //         better.  Specify 0 to disable automatic sampling; with this setting, samples will only be collected during
 //         calls to `getColor()` (useful for testing this wrapper).
 //   }
-var newColorSensorController = function (getColor, config) {
-    config = config || {};
-    config.stability = (config.stability === undefined) ? 20 : config.stability;
-    config.sampleFrequency = (config.sampleFrequency === undefined) ? 10 : config.sampleFrequency;
+var newColorSensorController = function (getColor) {
+    var config = {
+        stability: 1,
+        sampleFrequency: 0
+    };
 
     // calculates the average of a list of colors (for each channel).
     //   assumes there is at least one item in the list.
@@ -67,6 +68,12 @@ var newColorSensorController = function (getColor, config) {
         return stdev;
     }
 
+    function configureSampling(newConfig) {
+        config.stability = newConfig.stability !== undefined ? newConfig.stability : 20;
+        config.sampleFrequency = newConfig.frequency !== undefined ? newConfig.frequency : 100;
+        collectSamples();
+    }
+
     // determines whether or not the current "stable" color is within the given "color specification" (i.e. `spec`).
     //   see also: getStableColor()
     function isMatching(spec) {
@@ -86,10 +93,10 @@ var newColorSensorController = function (getColor, config) {
         return latestStableColor;
     }
 
-    function collectSamples(freq) {
-        if (freq !== 0) {
+    function collectSamples() {
+        if (config.sampleFrequency !== 0) {
             collectSample();
-            setTimeout(collectSamples, 1000 / freq, freq);
+            setTimeout(collectSamples, 1000 / config.sampleFrequency);
         }
     }
 
@@ -104,7 +111,7 @@ var newColorSensorController = function (getColor, config) {
         var currAvgColor = average(rawColors);
         avgColors.push(currAvgColor);
 
-        if (avgColors.length === config.stability) {
+        if (rawColors.length >= config.stability) {
             var stdev = standardDeviation(avgColors);
 
             // if this latest average is "stable", use that, otherwise stick the last "stable" value.
@@ -114,9 +121,8 @@ var newColorSensorController = function (getColor, config) {
             // ☝️ wait until the last possible moment to round values to minimize error.
             // ☝️ using stdev of 2.9 because 3.0 yielded significantly more different values.
 
-            // we only keep up to `config.stability` data points; since we added a new value, above, drop the oldest.
-            rawColors.shift();
-            avgColors.shift();
+            rawColors = rawColors.slice(rawColors.length - config.stability + 1);
+            avgColors = avgColors.slice(avgColors.length - config.stability + 1);
         }
 
         latestStableColor = color;
@@ -182,8 +188,8 @@ var newColorSensorController = function (getColor, config) {
         }(scanFrequency);
     }
 
-    collectSamples(config.sampleFrequency);
     return {
+        configureSampling: configureSampling,
         isMatching: isMatching,
         getColor: getStableColor,
         startScan: startScan,
@@ -228,14 +234,19 @@ var yellowSwatchSpec = {
 };
 
 
+var colorSensorCtrl = newColorSensorController(getColor);
+
 async function startProgram() {
+    colorSensorCtrl.configureSampling({stability: 5, sampleFrequency: 250});
+
     resetAim();
-    var colorSensorCtrl = newColorSensorController(getColor, {stability: 5, sampleFrequency: 250});
     openEyes();
     await delay(5);
-    lookForGold(colorSensorCtrl);
-    wanderOnWood(colorSensorCtrl);
-    // scanForColor(colorSensorCtrl);
+    lookForGold();
+    wanderOnWood();
+    scanForColor(async function() {
+       await delay(10);
+    });
 }
 
 var eyeState = {
@@ -279,7 +290,7 @@ function setBodyLed(color) {
 var state = "standing";
 var running = true;
 
-async function lookForGold(colorSensorCtrl) {
+async function lookForGold() {
     if (colorSensorCtrl.isMatching(yellowSwatchSpec)) {
         running = false;
         setBodyLed({r: 255, g: 240, b: 25});
@@ -287,10 +298,10 @@ async function lookForGold(colorSensorCtrl) {
         await speak("Gold!  I found gold!");
         return;
     }
-    setTimeout(lookForGold, 10, colorSensorCtrl);
+    setTimeout(lookForGold, 10);
 }
 
-async function wanderOnWood(colorSensorCtrl) {
+async function wanderOnWood() {
     if (!running) {
         return;
     }
@@ -302,13 +313,13 @@ async function wanderOnWood(colorSensorCtrl) {
         }
     } else {
         if (state === "wandering") {
-            backOff(colorSensorCtrl);
+            backOff();
         }
     }
-    setTimeout(wanderOnWood, 10, colorSensorCtrl);
+    setTimeout(wanderOnWood, 10);
 }
 
-async function backOff(colorSensorCtrl) {
+async function backOff() {
     if (!running) {
         return;
     }
@@ -326,21 +337,21 @@ async function backOff(colorSensorCtrl) {
                 360);
             setSpeed(-1 * getSpeed());
             state = "about face";
-            wanderOnWood(colorSensorCtrl);
+            wanderOnWood();
         }
     }
 
-    setTimeout(backOff, 10, colorSensorCtrl);
+    setTimeout(backOff, 10);
 }
 
 
-function showColor(colorSensorCtrl) {
+function showColor() {
     setMainLed(colorSensorCtrl.getColor());
-    setTimeout(showColor, 10, colorSensorCtrl);
+    setTimeout(showColor, 10);
 }
 
 
-async function speakSpaces(colorSensorCtrl) {
+async function speakSpaces() {
 
     while (true) {
         if (colorSensorCtrl.isMatching(carpetSpec)) {
@@ -356,10 +367,11 @@ async function speakSpaces(colorSensorCtrl) {
     }
 }
 
-async function scanForColor(colorSensorCtrl) {
+async function scanForColor(movementFn) {
     var scan = colorSensorCtrl.startScan();
 
-    await wiggleOverSwatch();
+    await movementFn();
+
     scan.stop();
     var count = scan.getCount();
     var spec = scan.getColorSpec();
