@@ -319,10 +319,11 @@ async function scanForColor(colorSensorCtrl) {
 
     await wiggleOverSwatch();
 
+    var count = colorSensorCtrl.stopScanning();
     var spec = colorSensorCtrl.yieldColorSpec();
     while(true) {
         setMainLed({r: 255, g:255, b:255});
-        await speak("From " + spec.count + " samples.");
+        await speak("From " + count + " samples.");
 
         setMainLed({r: spec.r.value, g:0, b:0});
         await speak("red: " + spec.r.value + "; delta " + spec.r.tolerance + "..");

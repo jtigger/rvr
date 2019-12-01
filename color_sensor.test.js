@@ -1,17 +1,39 @@
-// newColorSensorController returns a wrapper around the RVR color sensor
-//   getColor = the global `getColor()` RVR function
+// newColorSensorController returns a wrapper around the Sphero RVR RGB sensor (i.e. color sensor).
+//
+//   This wrapper provides two key features:
+//   1. stabilized color values -- the built-in RVR `getColor()` function returns the instantaneous color values.  This
+//      wrapper smooths-out these values so they appear more stable (i.e. the color reported only changes when a new
+//      color value has been reported for some time.
+//   2. color specifications -- in the EDU app, you can register an `onColor()` event to detect when the RVR senses a
+//      given color.  However, some surfaces (e.g. carpet, hardwood floors, or tile) vary in their current enough that
+//      they do not reliably trigger these color events.
+//      events.
+//      This wrapper includes a `isMatching()` function that allows you to detect when the current color falls within
+//      a range of colors (referred to as a "color specification" or "spec").
+//      It also contains a "scanner" that records the range of values observed and yields a specification describing
+//      that range.
+//
+//   Params:
+//   getColor = the built-in RVR `getColor()` function.
 //   config = {
-//      stability (int; 20) = how consistently the color sensor is reporting a given value until it gets reported
-//         by `getColor()`.  Smaller values make the controller more sensitive; larger values makes it more stable.
-//      sampleFrequency (number; 10) = approximately how frequently color samples should be asynchronously taken in a
-//         second (i.e. in Hz).  If 0, disables automatic sampling -- samples will only be collected during calls to
-//         `getColor()`.
+//      stability (int; default: 20) = how consistently the color sensor must report a given value until it gets reflected
+//         by this controller's `getColor()` function.  Give a smaller number for stability and the `getColor()`
+//         function is more sensitive to color changes.  Give a larger number for stability and the `getColor()`
+//         function requires the built-in RGB sensor to report values that are statistically similar before starting to
+//         report the new value.
+//      sampleFrequency (number; default: 10) = approximately how frequently color samples should be taken.  The
+//         value is specified in Hz (i.e. times per second).  Give a smaller number and fewer resources are used to
+//         collect color samples.  Give a larger value and the resolution of the color values used in this wrapper is
+//         better.  Specify 0 to disable automatic sampling; with this setting, samples will only be collected during
+//         calls to `getColor()` (useful for testing this wrapper).
 //   }
 var newColorSensorController = function (getColor, config) {
     config = config || {};
     config.stability = (config.stability === undefined) ? 20 : config.stability;
     config.sampleFrequency = (config.sampleFrequency === undefined) ? 10 : config.sampleFrequency;
 
+    // calculates the average of a list of colors (for each channel).
+    //   assumes there is at least one item in the list.
     function average(colors) {
         var avg = {r: 0, g: 0, b: 0};
         for (var idx = 0; idx < colors.length; idx++) {
@@ -26,6 +48,9 @@ var newColorSensorController = function (getColor, config) {
         return avg;
     }
 
+    // calculates the standard deviation of a list of colors (for each channel).
+    //   assumes there is at least one item in the list.
+    //   (see also: https://www.mathsisfun.com/data/standard-deviation-formulas.html)
     function standardDeviation(colors) {
         var avg = average(colors);
 
@@ -42,6 +67,8 @@ var newColorSensorController = function (getColor, config) {
         return stdev;
     }
 
+    // determines whether or not the current "stable" color is within the given "color specification" (i.e. `spec`).
+    //   see also: getStableColor()
     function isMatching(spec) {
         var c = getStableColor();
         return c.r >= spec.r.value - spec.r.tolerance &&
@@ -52,44 +79,47 @@ var newColorSensorController = function (getColor, config) {
             c.b <= spec.b.value + spec.b.tolerance;
     }
 
-    var rawColorLog = [];
-    var avgColorLog = [];
-    var stableColor = {r: 0, g: 0, b: 0};
-
     function getStableColor() {
         if (config.sampleFrequency === 0) {
             collectSample();
         }
-        return stableColor;
+        return latestStableColor;
     }
 
     function collectSamples(freq) {
         if (freq !== 0) {
             collectSample();
-            setTimeout(collectSamples, 1000/freq, freq);
+            setTimeout(collectSamples, 1000 / freq, freq);
         }
     }
 
+    var rawColors = [];
+    var avgColors = [];
+    var latestStableColor = {r: 0, g: 0, b: 0};
+
     function collectSample() {
-        var color = stableColor;
+        var color = latestStableColor;
 
-        rawColorLog.push(getColor());
-        var currAvgColor = average(rawColorLog);
-        avgColorLog.push(currAvgColor);
+        rawColors.push(getColor());
+        var currAvgColor = average(rawColors);
+        avgColors.push(currAvgColor);
 
-        if (avgColorLog.length === config.stability) {
-            var stdev = standardDeviation(avgColorLog);
+        if (avgColors.length === config.stability) {
+            var stdev = standardDeviation(avgColors);
 
-            color.r = (stdev.r < 2.9) ? Math.round(currAvgColor.r) : stableColor.r;
-            color.g = (stdev.g < 2.9) ? Math.round(currAvgColor.g) : stableColor.g;
-            color.b = (stdev.b < 2.9) ? Math.round(currAvgColor.b) : stableColor.b;
-            stableColor = color;
+            // if this latest average is "stable", use that, otherwise stick the last "stable" value.
+            color.r = (stdev.r < 2.9) ? Math.round(currAvgColor.r) : latestStableColor.r;
+            color.g = (stdev.g < 2.9) ? Math.round(currAvgColor.g) : latestStableColor.g;
+            color.b = (stdev.b < 2.9) ? Math.round(currAvgColor.b) : latestStableColor.b;
+            // ☝️ wait until the last possible moment to round values to minimize error.
+            // ☝️ using stdev of 2.9 because 3.0 yielded significantly more different values.
 
-            rawColorLog.shift();
-            avgColorLog.shift();
+            // we only keep up to `config.stability` data points; since we added a new value, above, drop the oldest.
+            rawColors.shift();
+            avgColors.shift();
         }
 
-        stableColor = color;
+        latestStableColor = color;
     }
 
     var scan = {
@@ -103,6 +133,9 @@ var newColorSensorController = function (getColor, config) {
     function takeScan(scanFrequency) {
         if (scan.enabled) {
             c = getStableColor();
+
+            // omit off/black; it's a start-up value and would result into artificially large tolerances in the
+            //   yielded color spec.
             if (!(c.r === 0 && c.g === 0 && c.b === 0)) {
                 scan.r.min = Math.min(scan.r.min, c.r);
                 scan.g.min = Math.min(scan.g.min, c.g);
@@ -112,14 +145,13 @@ var newColorSensorController = function (getColor, config) {
                 scan.b.max = Math.max(scan.b.max, c.b);
                 scan.count++;
             }
-            setTimeout(takeScan, 1000/scanFrequency, scanFrequency);
+            setTimeout(takeScan, 1000 / scanFrequency, scanFrequency);
         }
     }
 
     function startScanning(scanFrequency) {
-        if (scanFrequency === undefined) {
-            scanFrequency = 10;
-        }
+        scanFrequency = scanFrequency || 10;
+
         scan.enabled = true;
         scan.count = 0;
         takeScan(scanFrequency);
@@ -127,19 +159,20 @@ var newColorSensorController = function (getColor, config) {
 
     function stopScanning() {
         scan.enabled = false;
+        return scan.count;
     }
 
     function yieldColorSpec() {
-        var spec = {
-            r: {value: Math.round((scan.r.max + scan.r.min) / 2), tolerance: 0},
-            g: {value: Math.round((scan.g.max + scan.g.min) / 2), tolerance: 0},
-            b: {value: Math.round((scan.b.max + scan.b.min) / 2), tolerance: 0},
-            count: scan.count
+        var avg = {
+            r: (scan.r.max + scan.r.min) / 2,
+            g: (scan.g.max + scan.g.min) / 2,
+            b: (scan.b.max + scan.b.min) / 2
         };
-        spec.r.tolerance = Math.max(scan.r.max - spec.r.value, spec.r.value - scan.r.min);
-        spec.g.tolerance = Math.max(scan.g.max - spec.g.value, spec.g.value - scan.g.min);
-        spec.b.tolerance = Math.max(scan.b.max - spec.b.value, spec.b.value - scan.b.min);
-        return spec;
+        return {
+            r: {value: Math.round(avg.r), tolerance: Math.round(scan.r.max - avg.r)},
+            g: {value: Math.round(avg.g), tolerance: Math.round(scan.g.max - avg.g)},
+            b: {value: Math.round(avg.b), tolerance: Math.round(scan.b.max - avg.b)}
+        }
     }
 
     collectSamples(config.sampleFrequency);
@@ -394,8 +427,7 @@ describe('ColorSensorController', () => {
             expect(spec).toStrictEqual({
                 r: {value: 4, tolerance: 3},
                 g: {value: 45, tolerance: 5},
-                b: {value: 106, tolerance: 5},
-                count: 3
+                b: {value: 106, tolerance: 5}
             });
         });
         test('ignores black/off values', async () => {
