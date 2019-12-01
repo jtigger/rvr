@@ -122,66 +122,71 @@ var newColorSensorController = function (getColor, config) {
         latestStableColor = color;
     }
 
-    var scan = {
-        r: {min: 255, max: 0},
-        g: {min: 255, max: 0},
-        b: {min: 255, max: 0},
-        enabled: false,
-        count: 0
-    };
+    function startScan(scanFrequency) {
+        return function(freq) {
+            freq = freq || 10;
+            var enabled = true;
+            var count = 0;
+            var values = {
+                r: {min: 255, max: 0},
+                g: {min: 255, max: 0},
+                b: {min: 255, max: 0}
+            };
 
-    function takeScan(scanFrequency) {
-        if (scan.enabled) {
-            c = getStableColor();
+            function sampleColor(freq) {
+                if (enabled) {
+                    c = getStableColor();
 
-            // omit off/black; it's a start-up value and would result into artificially large tolerances in the
-            //   yielded color spec.
-            if (!(c.r === 0 && c.g === 0 && c.b === 0)) {
-                scan.r.min = Math.min(scan.r.min, c.r);
-                scan.g.min = Math.min(scan.g.min, c.g);
-                scan.b.min = Math.min(scan.b.min, c.b);
-                scan.r.max = Math.max(scan.r.max, c.r);
-                scan.g.max = Math.max(scan.g.max, c.g);
-                scan.b.max = Math.max(scan.b.max, c.b);
-                scan.count++;
+                    // omit off/black; it's a start-up value and would result into artificially large tolerances in the
+                    //   yielded color spec.
+                    if (!(c.r === 0 && c.g === 0 && c.b === 0)) {
+                        values.r.min = Math.min(values.r.min, c.r);
+                        values.g.min = Math.min(values.g.min, c.g);
+                        values.b.min = Math.min(values.b.min, c.b);
+                        values.r.max = Math.max(values.r.max, c.r);
+                        values.g.max = Math.max(values.g.max, c.g);
+                        values.b.max = Math.max(values.b.max, c.b);
+                        count++;
+                    }
+                    setTimeout(sampleColor, 1000 / freq, freq);
+                }
             }
-            setTimeout(takeScan, 1000 / scanFrequency, scanFrequency);
-        }
-    }
 
-    function startScanning(scanFrequency) {
-        scanFrequency = scanFrequency || 10;
+            function stop() {
+                enabled = false;
+            }
 
-        scan.enabled = true;
-        scan.count = 0;
-        takeScan(scanFrequency);
-    }
+            function getColorSpec() {
+                var avg = {
+                    r: (values.r.max + values.r.min) / 2,
+                    g: (values.g.max + values.g.min) / 2,
+                    b: (values.b.max + values.b.min) / 2
+                };
+                return {
+                    r: {value: Math.round(avg.r), tolerance: Math.round(values.r.max - avg.r)},
+                    g: {value: Math.round(avg.g), tolerance: Math.round(values.g.max - avg.g)},
+                    b: {value: Math.round(avg.b), tolerance: Math.round(values.b.max - avg.b)}
+                }
+            }
 
-    function stopScanning() {
-        scan.enabled = false;
-        return scan.count;
-    }
+            function getCount() {
+                return count;
+            }
 
-    function yieldColorSpec() {
-        var avg = {
-            r: (scan.r.max + scan.r.min) / 2,
-            g: (scan.g.max + scan.g.min) / 2,
-            b: (scan.b.max + scan.b.min) / 2
-        };
-        return {
-            r: {value: Math.round(avg.r), tolerance: Math.round(scan.r.max - avg.r)},
-            g: {value: Math.round(avg.g), tolerance: Math.round(scan.g.max - avg.g)},
-            b: {value: Math.round(avg.b), tolerance: Math.round(scan.b.max - avg.b)}
-        }
+            sampleColor(freq);
+            return {
+                stop: stop,
+                getColorSpec: getColorSpec,
+                getCount: getCount,
+            }
+        }(scanFrequency);
     }
 
     collectSamples(config.sampleFrequency);
     return {
         isMatching: isMatching,
-        startScanning: startScanning,
-        stopScanning: stopScanning,
-        yieldColorSpec: yieldColorSpec,
-        getColor: getStableColor
+        getColor: getStableColor,
+        startScan: startScan,
     }
 };
 
@@ -400,7 +405,7 @@ describe('ColorSensorController', () => {
             expect(controller.isMatching(spec)).toBeTruthy();
         });
     });
-    describe('yieldColorSpec()', () => {
+    describe('startScan()', () => {
         test('calculates a color spec from the colors scanned', async () => {
             let idx = 0;
             let data = [
@@ -418,13 +423,12 @@ describe('ColorSensorController', () => {
                 }
             };
             controller = newColorSensorController(getColor, {stability: 1, sampleFrequency: 0});
-            controller.startScanning(1000);
+            var scan = controller.startScan(1000);
             while (idx < data.length) {
                 await sleep(1);
             }
-            controller.stopScanning();
-            let spec = controller.yieldColorSpec();
-            expect(spec).toStrictEqual({
+            scan.stop();
+            expect(scan.getColorSpec()).toStrictEqual({
                 r: {value: 4, tolerance: 3},
                 g: {value: 45, tolerance: 5},
                 b: {value: 106, tolerance: 5}
@@ -441,18 +445,16 @@ describe('ColorSensorController', () => {
                 }
             };
             controller = newColorSensorController(getColor, {stability: 1, sampleFrequency: 0});
-            controller.startScanning(1000);
+            var scan = controller.startScan(1000);
             while (scanNum < 4) {
                 await sleep(1);
             }
-            controller.stopScanning();
-            let spec = controller.yieldColorSpec();
-            expect(spec.r.value).toBe(100);
-            expect(spec.r.tolerance).toBe(0);
-            expect(spec.g.value).toBe(120);
-            expect(spec.g.tolerance).toBe(0);
-            expect(spec.b.value).toBe(140);
-            expect(spec.b.tolerance).toBe(0);
+            scan.stop();
+            expect(scan.getColorSpec()).toStrictEqual({
+                r: {value: 100, tolerance: 0},
+                g: {value: 120, tolerance: 0},
+                b: {value: 140, tolerance: 0}
+            });
         })
     });
 
