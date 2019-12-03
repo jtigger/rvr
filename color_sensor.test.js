@@ -14,7 +14,7 @@
 //      that range.
 //
 //   Params:
-//   getColor = the built-in RVR `getColor()` function.
+//   getColorFn = the built-in RVR `getColor()` function.
 //   config = {
 //      stability (int; default: 20) = how consistently the color sensor must report a given value until it gets reflected
 //         by this controller's `getColor()` function.  Give a smaller number for stability and the `getColor()`
@@ -27,7 +27,11 @@
 //         better.  Specify 0 to disable automatic sampling; with this setting, samples will only be collected during
 //         calls to `getColor()` (useful for testing this wrapper).
 //   }
-var newColorSensorController = function (getColor) {
+var newColorSensorController = function (getColorFn) {
+    if (getColorFn === undefined) {
+        getColorFn = getColor;
+    }
+
     var config = {
         stability: 1,
         sampleFrequency: 0
@@ -107,7 +111,7 @@ var newColorSensorController = function (getColor) {
     function collectSample() {
         var color = latestStableColor;
 
-        rawColors.push(getColor());
+        rawColors.push(getColorFn());
         var currAvgColor = average(rawColors);
         avgColors.push(currAvgColor);
 
