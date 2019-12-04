@@ -27,6 +27,11 @@
 //         better.  Specify 0 to disable automatic sampling; with this setting, samples will only be collected during
 //         calls to `getColor()` (useful for testing this wrapper).
 //   }
+var getColor = function () {
+    throw("Undefined getColorFn.  If a testcase depends on a value from the `getColor()` Sphero builtin, it must " +
+        "define a fake of such a function and pass that in as the `getColorFn` parameter to the controller's " +
+        "constructor.");
+};
 var newColorSensorController = function (getColorFn) {
     if (getColorFn === undefined) {
         getColorFn = getColor;
@@ -78,17 +83,22 @@ var newColorSensorController = function (getColorFn) {
         collectSamples();
     }
 
+    function newSpec(values) {
+        values.isMatch = function (color) {
+            var c = color || getStableColor();
+            return c.r >= this.r.value - this.r.tolerance &&
+                c.r <= this.r.value + this.r.tolerance &&
+                c.g >= this.g.value - this.g.tolerance &&
+                c.g <= this.g.value + this.g.tolerance &&
+                c.b >= this.b.value - this.b.tolerance &&
+                c.b <= this.b.value + this.b.tolerance;
+        };
+
+        return values;
+    }
+
     // determines whether or not the current "stable" color is within the given "color specification" (i.e. `spec`).
     //   see also: getStableColor()
-    function isMatching(spec) {
-        var c = getStableColor();
-        return c.r >= spec.r.value - spec.r.tolerance &&
-            c.r <= spec.r.value + spec.r.tolerance &&
-            c.g >= spec.g.value - spec.g.tolerance &&
-            c.g <= spec.g.value + spec.g.tolerance &&
-            c.b >= spec.b.value - spec.b.tolerance &&
-            c.b <= spec.b.value + spec.b.tolerance;
-    }
 
     function getStableColor() {
         if (config.sampleFrequency === 0) {
@@ -133,7 +143,7 @@ var newColorSensorController = function (getColorFn) {
     }
 
     function startScan(scanFrequency) {
-        return function(freq) {
+        return function (freq) {
             freq = freq || 10;
             var enabled = true;
             var count = 0;
@@ -194,9 +204,9 @@ var newColorSensorController = function (getColorFn) {
 
     return {
         configureSampling: configureSampling,
-        isMatching: isMatching,
         getColor: getStableColor,
         startScan: startScan,
+        newSpec: newSpec
     }
 };
 
@@ -342,78 +352,91 @@ describe('ColorSensorController', () => {
             }
         })
     });
-    describe('isMatching()', () => {
+    describe('matches()', () => {
         test('when given color is within tolerances, returns true', async () => {
-            let spec = {
+            controller = newColorSensorController();
+            let spec = controller.newSpec({
                 r: {value: 255, tolerance: 10},
                 g: {value: 57, tolerance: 10},
                 b: {value: 97, tolerance: 10}
-            };
-            let getColor = function () {
-                return {r: 255, g: 57, b: 97};
-            };
-            controller = newColorSensorController(getColor);
-            expect(controller.isMatching(spec)).toBeTruthy();
+            });
+            expect(spec.isMatch({r: 255, g: 57, b: 97})).toBeTruthy();
         });
         test('when red is outside tolerances, returns false', async () => {
-            let spec = {
+            controller = newColorSensorController();
+            let spec = controller.newSpec({
                 r: {value: 255, tolerance: 10},
                 g: {value: 57, tolerance: 10},
                 b: {value: 97, tolerance: 10}
-            };
-            let getColor = function () {
-                return {r: 235, g: 57, b: 97};
-            };
-            controller = newColorSensorController(getColor);
-            expect(controller.isMatching(spec)).toBeFalsy();
+            });
+            expect(spec.isMatch({r: 235, g: 57, b: 97})).toBeFalsy();
         });
         test('when green is outside tolerances, returns false', async () => {
-            let spec = {
+            controller = newColorSensorController();
+            let spec = controller.newSpec({
                 r: {value: 255, tolerance: 10},
                 g: {value: 57, tolerance: 10},
                 b: {value: 97, tolerance: 10}
-            };
-            let getColor = function () {
-                return {r: 255, g: 68, b: 97};
-            };
-            controller = newColorSensorController(getColor);
-            expect(controller.isMatching(spec)).toBeFalsy();
+            });
+            expect(spec.isMatch({r: 255, g: 68, b: 97})).toBeFalsy();
         });
         test('when blue is outside tolerances, returns false', async () => {
-            let spec = {
+            controller = newColorSensorController();
+            let spec = controller.newSpec({
                 r: {value: 255, tolerance: 10},
                 g: {value: 57, tolerance: 10},
                 b: {value: 97, tolerance: 10}
-            };
-            let getColor = function () {
-                return {r: 255, g: 57, b: 197};
-            };
-            controller = newColorSensorController(getColor);
-            expect(controller.isMatching(spec)).toBeFalsy();
+            });
+            expect(spec.isMatch({r: 255, g: 57, b: 197})).toBeFalsy();
         });
         test('when given color is at upper tolerances, returns true', async () => {
-            let spec = {
-                r: {value: 100, tolerance: 10},
-                g: {value: 50, tolerance: 10},
-                b: {value: 90, tolerance: 10}
-            };
-            let getColor = function () {
-                return {r: 110, g: 60, b: 100};
-            };
-            controller = newColorSensorController(getColor);
-            expect(controller.isMatching(spec)).toBeTruthy();
+            controller = newColorSensorController();
+            let spec = controller.newSpec({
+                r: {value: 245, tolerance: 10},
+                g: {value: 57, tolerance: 10},
+                b: {value: 97, tolerance: 10}
+            });
+            expect(spec.isMatch({r: 255, g: 67, b: 107})).toBeTruthy();
         });
         test('when given color is equal to lower tolerances, returns true', async () => {
-            let spec = {
+            controller = newColorSensorController();
+            let spec = controller.newSpec({
+                r: {value: 255, tolerance: 10},
+                g: {value: 57, tolerance: 10},
+                b: {value: 97, tolerance: 10}
+            });
+            expect(spec.isMatch({r: 245, g: 47, b: 87})).toBeTruthy();
+        });
+        xtest('when no color is specified, defaults to the controller\'s current stable color', async () => {
+            let data = [
+                {r: 255, g: 57, b: 97},  // within tolerances
+                {r: 235, g: 57, b: 97},  // red outside tolerances
+                {r: 255, g: 68, b: 97},  // green outside tolerances
+                {r: 255, g: 57, b: 197}, // blue outside tolerances
+                {r: 110, g: 60, b: 100}, // at upper tolerances
+                {r: 90, g: 40, b: 80}    // at lower tolerances
+            ];
+            let idx = 0;
+            let getColor = function () {
+                var c = data[idx];
+                if (idx < data.length() - 1) {
+                    idx++
+                }
+                return c;
+            };
+            controller = newColorSensorController(getColor);
+            let spec = controller.newSpec({
                 r: {value: 100, tolerance: 10},
                 g: {value: 50, tolerance: 10},
                 b: {value: 90, tolerance: 10}
-            };
-            let getColor = function () {
-                return {r: 90, g: 40, b: 80};
-            };
-            controller = newColorSensorController(getColor);
-            expect(controller.isMatching(spec)).toBeTruthy();
+            });
+            expect(spec.isMatching()).toBeTruthy(); // within tolerances
+            expect(spec.isMatching()).toBeFalsy(); // red outside tolerances
+            expect(spec.isMatching()).toBeFalsy(); // green outside tolerances
+            expect(spec.isMatching()).toBeFalsy(); // blue outside tolerances
+            expect(spec.isMatching()).toBeTruthy(); // at upper tolerances
+            expect(spec.isMatching()).toBeTruthy(); // at lower tolerances
+
         });
     });
     describe('startScan()', () => {
