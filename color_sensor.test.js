@@ -95,9 +95,13 @@ var newColorSensorController = function (getColorFn) {
         };
 
         colorWithTolerances.whenMatches = function (handler) {
-            var handlers = specsToHandlers.get(this) || [];
-            specsToHandlers.set(this, handlers);
-            handlers.push({fn: handler, isRunning: false});
+            if(typeof handler === "function") {
+                var handlers = specsToHandlers.get(this) || [];
+                specsToHandlers.set(this, handlers);
+                handlers.push({fn: handler, isRunning: false});
+            } else {
+                specsToHandlers.delete(this);
+            }
         };
 
         return colorWithTolerances;
@@ -611,7 +615,7 @@ describe('ColorSensorController', () => {
                 expect(firstTriggered).toBeTruthy();
                 expect(secondTriggered).toBeTruthy();
             });
-            it('when matches again, during prior invocation, does NOT invoke again', async () => {
+            it('given a handler was previously triggered but has not finished, when color matches again, does NOT invoke again', async () => {
                 let data = [
                     {r: 10, g: 20, b: 30},
                     {r: 255, g: 57, b: 97},
@@ -669,7 +673,24 @@ describe('ColorSensorController', () => {
                 controller.getColor(); // transition back
                 expect(timesTriggered).toBe(2);
             });
-            xit('when given no handler, no longer invokes previously registered handlers', () => {
+            it('given handler is not a function (e.g. undefined), does NOT trigger anymore', () => {
+                var triggered = false;
+                let getColor = function () {
+                    return {r: 15, g: 25, b: 35};
+                };
+                let controller = newColorSensorController(getColor);
+                let spec = controller.newSpec({
+                    r: {value: 10, tolerance: 10},
+                    g: {value: 20, tolerance: 10},
+                    b: {value: 30, tolerance: 10},
+                });
+                spec.whenMatches((done) => {
+                    triggered = true;
+                    done();
+                });
+                spec.whenMatches();
+                controller.getColor(); // cause a sample to be taken that triggers a transition.
+                expect(triggered).toBeFalsy();
             });
         });
     });
