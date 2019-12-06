@@ -106,9 +106,9 @@ var newColorSensorController = function (getColorFn) {
     var latestStableColor = {r: 0, g: 0, b: 0};
 
     function collectSample() {
-        rawColors.push(getColorFn());
+        rawColors.unshift(getColorFn());
         var currAvgColor = average(rawColors);
-        avgColors.push(currAvgColor);
+        avgColors.unshift(currAvgColor);
 
         // have we collected enough data points to even think about calculating stability?
         if (avgColors.length >= config.stability) {
@@ -120,8 +120,8 @@ var newColorSensorController = function (getColorFn) {
                     invokeHandlersMatching(latestStableColor);
                 }
             }
-            rawColors = rawColors.slice(rawColors.length - config.stability + 1);
-            avgColors = avgColors.slice(avgColors.length - config.stability + 1);
+            rawColors = rawColors.slice(0, config.stability - 1);
+            avgColors = avgColors.slice(0, config.stability - 1);
         }
     }
 
