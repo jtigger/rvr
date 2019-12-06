@@ -183,7 +183,7 @@ var newColorSensorController = function (getColorFn) {
 
             function sampleColor(freq) {
                 if (enabled) {
-                    c = getStableColor();
+                    c = getColorFn();
 
                     // omit off/black; it's a start-up value and would result into artificially large tolerances in the
                     //   yielded color spec.
